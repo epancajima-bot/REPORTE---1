@@ -1,32 +1,89 @@
 // ==============================================================================
-// GOOGLE APPS SCRIPT - CONECTOR DE BASE DE DATOS VIVA EN GOOGLE SHEETS
-// Proyecto: Redes Sanitarias de Agua Potable y Alcantarillado
-// Vinculado a: https://epancajima-bot.github.io/REPORTE---1/
+// GOOGLE APPS SCRIPT - CONECTOR DE BASE DE DATOS VIVA EN GOOGLE SHEETS  (v2.0)
+// Proyecto : Redes Sanitarias de Agua Potable y Alcantarillado
+// Vinculado: https://epancajima-bot.github.io/REPORTE---1/
+// Objetivo : Recibir los reportes de los portales HTML (tareador, almacenero,
+//            administradora, ing_campo) y escribir filas en la pestaña 04,
+//            con P.U. y Subtotal calculados por fórmulas vivas de Google Sheets.
 // ==============================================================================
 
-var TAB_NAME_LOGS = "04_LOG_FIELD_ENTRIES";
+// ------------------------------------------------------------------------------
+// 1. CONFIGURACIÓN CENTRAL  (ajusta estos valores antes de desplegar)
+// ------------------------------------------------------------------------------
 
-// URL raíz de la página publicada en GitHub Pages (ajustar si cambia el repo/sitio)
-var GH_PAGES_URL = "https://epancajima-bot.github.io/REPORTE---1/";
+var CONFIG = {
+  // Si lo dejas en null, el script usará la hoja de cálculo ACTIVA desde la que
+  // abriste Apps Script (Extensiones > Apps Script). También puedes forzar una
+  // URL o ID específico: "https://docs.google.com/spreadsheets/d/XXXX/edit"
+  spreadSheetIdOrUrl: "https://docs.google.com/spreadsheets/d/1nlN-U7iJFBlGNS-q0xBxSzJWSDI2uMr_dCZ2eU6W3hE/edit",
 
-var SPREADSHEET_ID_OR_URL = null;
+  // Pestaña donde se insertan los reportes de campo (04_LOG_FIELD_ENTRIES)
+  tabLogs: "04_LOG_FIELD_ENTRIES",
+
+  // Maestros de donde el VLOOKUP toma el Precio Unitario
+  tabRecursos     : "05_MAESTRO_RECURSOS",
+  tabPartidas     : "06_MAESTRO_PARTIDAS_EV",
+
+  // URL raíz de la página publicada en GitHub Pages
+  ghPagesUrl: "https://epancajima-bot.github.io/REPORTE---1/",
+
+  // Zona horaria para interpretar las fechas
+  timeZone: "America/Lima"
+};
+
+// ------------------------------------------------------------------------------
+// 2. INSTALACIÓN DE MENÚ EN GOOGLE SHEETS (opcional, facilita la prueba)
+// ------------------------------------------------------------------------------
+
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu("📊 ReporteSmart v2")
+    .addItem("1. Probar conexión", "probarConexion")
+    .addSeparator()
+    .addItem("2. Forzar autorización", "forzarAutorizacion")
+    .addSeparator()
+    .addItem("3. Importar base sintética (GitHub)", "importarBaseSinteticaDesdeGithub")
+    .addToUi();
+}
+
+// ------------------------------------------------------------------------------
+// 3. ACCESO A LA HOJA DE CÁLCULO
+// ------------------------------------------------------------------------------
 
 function getSpreadsheet() {
+  var target = CONFIG.spreadSheetIdOrUrl || SPREADSHEET_ID_OR_URL || null;
   try {
-    if (SPREADSHEET_ID_OR_URL) {
-      if (SPREADSHEET_ID_OR_URL.indexOf("https://") === 0) {
-        return SpreadsheetApp.openByUrl(SPREADSHEET_ID_OR_URL);
-      } else {
-        return SpreadsheetApp.openById(SPREADSHEET_ID_OR_URL);
-      }
+    if (target) {
+      return String(target).indexOf("https://") === 0
+        ? SpreadsheetApp.openByUrl(String(target))
+        : SpreadsheetApp.openById(String(target));
     }
-    var active = SpreadsheetApp.getActiveSpreadsheet();
-    if (active) return active;
+    return SpreadsheetApp.getActiveSpreadsheet();
   } catch (err) {
     console.error("Error al obtener hoja:", err);
   }
   return null;
 }
+
+function getOrCreateLogsSheet(ss) {
+  var sheet = ss.getSheetByName(CONFIG.tabLogs);
+  if (sheet) return sheet;
+  sheet = ss.insertSheet(CONFIG.tabLogs);
+  sheet.appendRow([
+    "ID Registro", "Fecha", "Rol Responsable", "Código WBS",
+    "Código Recurso/Partida", "Descripción / Detalle", "Cantidad Campo",
+    "Unidad", "P.U. (Busca en Maestro)", "Subtotal Monto (S/)",
+    "Categoría EVM", "Origen HTML"
+  ]);
+  return sheet;
+}
+
+// ------------------------------------------------------------------------------
+// 4. ENDPOINT POST - EL PORTAL HTML ENVÍA AQUÍ LOS REPORTES
+// ------------------------------------------------------------------------------
+// Contrato JSON esperado (según auditoría de alineación HTML <-> Sheets):
+//   { fecha, rol, wbs, codigoRecurso, detalle, cantidad, unidad, tipo, origen_html }
+// Puede recibir un objeto o un array de objetos.
 
 function doPost(e) {
   try {
@@ -36,100 +93,88 @@ function doPost(e) {
 
     var rawContent = JSON.parse(e.postData.contents);
     var records = Array.isArray(rawContent) ? rawContent : [rawContent];
+    if (records.length === 0) {
+      return responseJSON({ status: "ERROR", message: "El payload no contiene registros." });
+    }
 
     var ss = getSpreadsheet();
     if (!ss) {
-      return responseJSON({ 
-        status: "ERROR", 
-        message: "No se pudo acceder al Google Sheet activo. Asegúrate de abrir Apps Script desde el menú Extensiones > Apps Script de tu hoja de cálculo actual." 
+      return responseJSON({
+        status: "ERROR",
+        message: "No se pudo acceder a la hoja de cálculo. Revisa CONFIG.spreadSheetIdOrUrl."
       });
     }
 
-    var sheet = ss.getSheetByName(TAB_NAME_LOGS);
+    var sheet = getOrCreateLogsSheet(ss);
 
-    if (!sheet) {
-      sheet = ss.insertSheet(TAB_NAME_LOGS);
-      sheet.appendRow([
-        "ID Registro", "Fecha", "Rol Responsable", "Código WBS", 
-        "Código Recurso/Partida", "Descripción / Detalle", "Cantidad Campo", 
-        "Unidad", "P.U. (Busca en Maestro)", "Subtotal Monto (S/)", 
-        "Categoría EVM", "Origen HTML"
-      ]);
-    }
-
-    // Determinar el siguiente número secuencial para el ID LOG-YYYYMMDD-XXX
+    // Secuencia del siguiente ID LOG-YYYYMMDD-XXX
+    var todayStr = new Date().toISOString().split("T")[0].replace(/-/g, "");
     var nextNum = 1;
-    var todayStr = new Date().toISOString().split("T")[0].replace(/-/g, ""); // YYYYMMDD
-    var startRow = sheet.getLastRow();
-    
-    if (startRow >= 2) {
-      var ids = sheet.getRange(2, 1, startRow - 1, 1).getValues();
+    var lastRow = sheet.getLastRow();
+    if (lastRow >= 2) {
+      var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
       for (var r = ids.length - 1; r >= 0; r--) {
-        var currId = ids[r][0].toString();
+        var currId = String(ids[r][0] || "");
         if (currId.indexOf("LOG-") === 0) {
           var parts = currId.split("-");
           if (parts.length === 3) {
-            var lastNum = parseInt(parts[2], 10);
-            if (!isNaN(lastNum)) {
-              nextNum = lastNum + 1;
-              break;
-            }
+            var num = parseInt(parts[2], 10);
+            if (!isNaN(num)) { nextNum = num + 1; break; }
           }
         }
       }
     }
 
     var insertedCount = 0;
+    var errores = [];
 
     for (var i = 0; i < records.length; i++) {
-      var data = records[i];
-      
-      // Calcular la fila exacta de forma correlativa para evitar que getLastRow() devuelva
-      // un valor desactualizado dentro de bucles rápidos antes de que se limpie la caché de Sheets.
-      var currentRow = startRow + i + 1;
+      var data = records[i] || {};
+      var currentRow = lastRow + i + 1;
 
-      // Generación secuencial de ID Registro para evitar códigos UUID complejos
-      var numStr = nextNum.toString();
-      while (numStr.length < 3) {
-        numStr = "0" + numStr;
-      }
+      // Construir ID correlativo LOG-YYYYMMDD-XXX
+      var numStr = String(nextNum);
+      while (numStr.length < 3) { numStr = "0" + numStr; }
       var idVal = "LOG-" + todayStr + "-" + numStr;
       nextNum++;
 
-      var fechaVal = data.fecha || new Date().toISOString().split("T")[0];
-      var rolVal = data.rol || data.emisor_rol || "Sin Rol";
-      var wbsVal = data.wbs || data.wbs_codigo || "WBS-100";
-      
-      // Forzar formato de texto para códigos numéricos como "01.01" para evitar que Sheets los convierta en números decimales (ej. 1.01) y rompa el VLOOKUP
-      var codVal = data.codigoRecurso || data.codigo_recurso_partida || "MO_PEON";
-      codVal = String(codVal);
+      var fechaVal  = data.fecha  || new Date().toISOString().split("T")[0];
+      var rolVal    = data.rol    || data.emisor_rol || "Sin Rol";
+      var wbsVal    = data.wbs    || data.wbs_codigo || "WBS-100";
+
+      // Forzar texto para códigos numéricos ("01.02.02") y evitar que Sheets
+      // convierta a decimal (1.02) y rompa el VLOOKUP.
+      var codVal = String(data.codigoRecurso || data.codigo_recurso_partida || "MO_PEON");
       if (codVal.match(/^\d+(\.\d+)+$/) || !isNaN(codVal)) {
         codVal = "'" + codVal;
       }
 
-      var detVal = data.detalle || data.descripcion || "";
+      var detVal  = data.detalle || data.descripcion || "";
       var cantVal = Number(data.cantidad) || 0.0;
-      var undVal = data.unidad || "und";
-      var catVal = data.tipo || data.categoria_evm || "AC_MO";
-      var origVal = data.origen_html || "almacenero.html";
+      var undVal  = data.unidad || "und";
+      var catVal  = data.tipo   || data.categoria_evm || "AC_MO";
+      var origVal = data.origen_html || (data.rol === "Tareador (Bildin)" ? "tareador.html" : "almacenero.html");
 
       sheet.appendRow([
         idVal, fechaVal, rolVal, wbsVal, codVal, detVal, cantVal, undVal,
         "", "", catVal, origVal
       ]);
 
-      // Centrar el contenido de las columnas A, D, E y H en la fila insertada
-      sheet.getRange(currentRow, 1).setHorizontalAlignment("center"); // Col A (ID Registro)
-      sheet.getRange(currentRow, 4).setHorizontalAlignment("center"); // Col D (Código WBS)
-      sheet.getRange(currentRow, 5).setHorizontalAlignment("center"); // Col E (Código Recurso/Partida)
-      sheet.getRange(currentRow, 8).setHorizontalAlignment("center"); // Col H (Unidad)
+      // Centrar columnas A, D, E y H
+      sheet.getRange(currentRow, 1).setHorizontalAlignment("center");
+      sheet.getRange(currentRow, 4).setHorizontalAlignment("center");
+      sheet.getRange(currentRow, 5).setHorizontalAlignment("center");
+      sheet.getRange(currentRow, 8).setHorizontalAlignment("center");
 
-      // Fórmulas en notación A1 limpia y alineada con la estructura del Excel
-      // Busca en '05_MAESTRO_RECURSOS' (Col D: P.U. Meta Oficial) o '06_MAESTRO_PARTIDAS_EV' (Col F: P.U. Directo Meta)
+      // P.U. : busca en 05_MAESTRO_RECURSOS (col D) o en 06_MAESTRO_PARTIDAS_EV (col F)
       var rangePU = sheet.getRange(currentRow, 9);
-      rangePU.setFormula("=IFERROR(VLOOKUP(E" + currentRow + ", '05_MAESTRO_RECURSOS'!A:D, 4, FALSE), IFERROR(VLOOKUP(E" + currentRow + ", '06_MAESTRO_PARTIDAS_EV'!B:F, 5, FALSE), 0))");
+      rangePU.setFormula(
+        "=IFERROR(VLOOKUP(E" + currentRow + ", '" + CONFIG.tabRecursos + "'!A:D, 4, FALSE), " +
+        "IFERROR(VLOOKUP(E" + currentRow + ", '" + CONFIG.tabPartidas + "'!B:F, 5, FALSE), 0))"
+      );
       rangePU.setNumberFormat("S/ #,##0.00");
 
+      // Subtotal = Cantidad * P.U.
       var rangeSubtotal = sheet.getRange(currentRow, 10);
       rangeSubtotal.setFormula("=ROUND(G" + currentRow + " * I" + currentRow + ", 2)");
       rangeSubtotal.setNumberFormat("S/ #,##0.00");
@@ -139,8 +184,10 @@ function doPost(e) {
 
     return responseJSON({
       status: "SUCCESS",
-      message: "Se insertaron " + insertedCount + " registro(s) correctamente en la pestaña " + TAB_NAME_LOGS + " de Google Sheets.",
-      count: insertedCount
+      message: "Se insertaron " + insertedCount + " registro(s) en la pestaña '" + CONFIG.tabLogs + "'.",
+      count: insertedCount,
+      errores: errores,
+      timestamp: new Date().toISOString()
     });
 
   } catch (error) {
@@ -151,6 +198,10 @@ function doPost(e) {
   }
 }
 
+// ------------------------------------------------------------------------------
+// 5. ENDPOINT GET - EL DASHBOARD LEE LOS REGISTROS Y EL CONSOLIDADO EVM
+// ------------------------------------------------------------------------------
+
 function doGet(e) {
   try {
     var ss = getSpreadsheet();
@@ -158,22 +209,20 @@ function doGet(e) {
       return responseJSON({ status: "ERROR", message: "No se pudo acceder a la hoja de cálculo." });
     }
 
-    var sheetLogs = ss.getSheetByName(TAB_NAME_LOGS);
+    // --- 5.1 Leer pestaña 04 (logs de campo) -------------------------------
     var logsData = [];
-    
+    var sheetLogs = ss.getSheetByName(CONFIG.tabLogs);
     if (sheetLogs) {
       var lastRowLogs = sheetLogs.getLastRow();
       if (lastRowLogs >= 2) {
-        var rangeLogs = sheetLogs.getRange(2, 1, lastRowLogs - 1, 12); // Leer las 12 columnas (A a L)
-        var valuesLogs = rangeLogs.getValues();
-        
+        var valuesLogs = sheetLogs.getRange(2, 1, lastRowLogs - 1, 12).getValues();
         for (var i = 0; i < valuesLogs.length; i++) {
           var row = valuesLogs[i];
           if (!row[0] && !row[4]) continue;
 
           var fechaVal = row[1];
           if (fechaVal instanceof Date) {
-            fechaVal = Utilities.formatDate(fechaVal, Session.getScriptTimeZone(), "yyyy-MM-dd");
+            fechaVal = Utilities.formatDate(fechaVal, CONFIG.timeZone, "yyyy-MM-dd");
           } else if (fechaVal) {
             fechaVal = String(fechaVal).split("T")[0];
           }
@@ -196,22 +245,20 @@ function doGet(e) {
       }
     }
 
-    // LEER CONSOLIDADO DE EVM POR WBS (PESTAÑA 03)
+    // --- 5.2 Leer pestaña 03 (consolidado diario EVM por WBS) --------------
     var consolidadoData = [];
-    var sheetConsolidado = ss.getSheetByName("03_CONSOLIDADO_DIARIO_EVM_WBS");
-    if (sheetConsolidado) {
-      var lastRowCons = sheetConsolidado.getLastRow();
+    var sheetCons = ss.getSheetByName("03_CONSOLIDADO_DIARIO_EVM_WBS");
+    if (sheetCons) {
+      var lastRowCons = sheetCons.getLastRow();
       if (lastRowCons >= 2) {
-        var rangeCons = sheetConsolidado.getRange(2, 1, lastRowCons - 1, 12); // Leer las 12 columnas (A a L)
-        var valuesCons = rangeCons.getValues();
-        
+        var valuesCons = sheetCons.getRange(2, 1, lastRowCons - 1, 12).getValues();
         for (var j = 0; j < valuesCons.length; j++) {
           var rowC = valuesCons[j];
-          if (!rowC[1] || !rowC[2]) continue; // Necesita fecha y WBS
+          if (!rowC[1] || !rowC[2]) continue;
 
           var fechaCVal = rowC[1];
           if (fechaCVal instanceof Date) {
-            fechaCVal = Utilities.formatDate(fechaCVal, Session.getScriptTimeZone(), "yyyy-MM-dd");
+            fechaCVal = Utilities.formatDate(fechaCVal, CONFIG.timeZone, "yyyy-MM-dd");
           } else if (fechaCVal) {
             fechaCVal = String(fechaCVal).split("T")[0];
           }
@@ -236,8 +283,9 @@ function doGet(e) {
 
     return responseJSON({
       status: "SUCCESS",
-      version: "1.1.0",
+      version: "2.0.0",
       proyecto: "Redes Sanitarias de Agua Potable y Alcantarillado",
+      gh_pages: CONFIG.ghPagesUrl,
       logs: logsData,
       consolidado: consolidadoData,
       timestamp: new Date().toISOString()
@@ -251,92 +299,99 @@ function doGet(e) {
   }
 }
 
+// ------------------------------------------------------------------------------
+// 6. AUXILIARES
+// ------------------------------------------------------------------------------
+
 function responseJSON(data) {
   return ContentService.createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-// Función de prueba directa para autorizar permisos de Google Sheets
+// --- 6.1 Prueba de conexión y permisos de escritura --------------------------
+
 function probarConexion() {
   var ss = getSpreadsheet();
-  if (ss) {
-    Logger.log("✅ Conexión exitosa al Google Sheet: " + ss.getName());
-    var sheet = ss.getSheetByName(TAB_NAME_LOGS);
-    if (sheet) {
-      Logger.log("✅ Pestaña encontrada: " + TAB_NAME_LOGS + " con " + sheet.getLastRow() + " filas.");
-      try {
-        // Intentar escribir un valor de prueba en una celda temporal y luego borrarlo
-        var tempRange = sheet.getRange("Z1");
-        tempRange.setValue("TEST_WRITE");
-        tempRange.clearContent();
-        Logger.log("✅ Permiso de ESCRITURA confirmado con éxito.");
-      } catch (writeErr) {
-        Logger.log("❌ ERROR DE ESCRITURA: Tu cuenta no tiene permisos de Editor en este documento. Detalle: " + writeErr.toString());
-      }
-    } else {
-      Logger.log("⚠️ La pestaña " + TAB_NAME_LOGS + " no existe aún (se creará automáticamente).");
+  if (!ss) {
+    Logger.log("❌ No se pudo conectar a la hoja de cálculo.");
+    return;
+  }
+  Logger.log("✅ Conexión exitosa al Google Sheet: " + ss.getName());
+
+  var sheet = ss.getSheetByName(CONFIG.tabLogs);
+  if (sheet) {
+    Logger.log("✅ Pestaña '" + CONFIG.tabLogs + "' encontrada con " + sheet.getLastRow() + " filas.");
+    try {
+      var tempRange = sheet.getRange("Z1");
+      tempRange.setValue("TEST_WRITE");
+      tempRange.clearContent();
+      Logger.log("✅ Permiso de ESCRITURA confirmado.");
+    } catch (writeErr) {
+      Logger.log("❌ ERROR DE ESCRITURA: revisa que tu cuenta tenga permisos de Editor. Detalle: " + writeErr.toString());
     }
   } else {
-    Logger.log("❌ No se pudo conectar a la hoja de cálculo.");
+    Logger.log("⚠️ La pestaña '" + CONFIG.tabLogs + "' se creará automáticamente con el primer POST.");
   }
 }
 
-// Función sin try-catch para forzar la ventana emergente de permisos de Google.
-// Ajusta el ID de la hoja de cálculo si tu base viva está en otro documento.
+// --- 6.2 Forzar la ventana de permisos de Google -----------------------------
+
 function forzarAutorizacion() {
-  var ss = SpreadsheetApp.openByUrl("https://docs.google.com/spreadsheets/d/1nlN-U7iJFBlGNS-q0xBxSzJWSDI2uMr_dCZ2eU6W3hE/edit");
-  Logger.log("✅ Documento abierto con éxito: " + ss.getName());
+  var ss = getSpreadsheet();
+  if (ss) {
+    Logger.log("✅ Documento abierto con éxito: " + ss.getName());
+    Logger.log("ℹ️ URL para copiar y desplegar: " + CONFIG.ghPagesUrl);
+    return;
+  }
+  Logger.log("❌ Revisa CONFIG.spreadSheetIdOrUrl.");
 }
 
-// Macro para importar la base de datos sintética directamente desde tu GitHub Pages
+// --- 6.3 Importar la base sintética desde GitHub Pages ------------------------
+
 function importarBaseSinteticaDesdeGithub() {
-  var url = GH_PAGES_URL + "data/base_datos_reportabilidad.json";
-  Logger.log("📥 Descargando base de datos sintética desde GitHub Pages: " + url);
-  
+  var url = CONFIG.ghPagesUrl + "data/base_datos_reportabilidad.json";
+  Logger.log("📥 Descargando base de datos sintética desde: " + url);
+
   try {
     var response = UrlFetchApp.fetch(url);
     var json = JSON.parse(response.getContentText());
     var logs = json.registros_diarios;
-    
+
     if (!logs || logs.length === 0) {
       Logger.log("❌ No se encontraron registros en el JSON.");
       return;
     }
-    
+
     Logger.log("✅ Se descargaron " + logs.length + " registros.");
-    
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var sheet = ss.getSheetByName("04_LOG_FIELD_ENTRIES");
-    
+
+    var ss = getSpreadsheet();
+    var sheet = ss.getSheetByName(CONFIG.tabLogs);
     if (!sheet) {
-      Logger.log("❌ Pestaña '04_LOG_FIELD_ENTRIES' no encontrada.");
+      Logger.log("❌ Pestaña '" + CONFIG.tabLogs + "' no encontrada.");
       return;
     }
-    
-    // 1. Limpiar registros antiguos (fila 2 en adelante)
+
+    // 1. Limpiar registros antiguos
     var lastRow = sheet.getLastRow();
     if (lastRow >= 2) {
       sheet.deleteRows(2, lastRow - 1);
     }
-    Logger.log("🧹 Pestaña 04_LOG_FIELD_ENTRIES limpiada.");
-    
-    // 2. Preparar el array de datos
+    Logger.log("🧹 Pestaña '" + CONFIG.tabLogs + "' limpiada.");
+
+    // 2. Preparar filas con fórmulas vivas
     var rowsToWrite = [];
     for (var i = 0; i < logs.length; i++) {
       var log = logs[i];
-      
-      // Parsear fecha yyyy-mm-dd a objeto Date de Google Sheets
-      var dateParts = log.fecha.split("-");
+      var dateParts = String(log.fecha).split("-");
       var dateObj = new Date(parseInt(dateParts[0]), parseInt(dateParts[1]) - 1, parseInt(dateParts[2]));
-      
-      // Generar fórmulas
-      var rowNum = i + 2; // Inicia en fila 2
-      var formulaPU = "=IFERROR(VLOOKUP(E" + rowNum + "; '05_MAESTRO_RECURSOS'!A:D; 4; FALSE); IFERROR(VLOOKUP(E" + rowNum + "; '06_MAESTRO_PARTIDAS_EV'!B:F; 5; FALSE); 0))";
+
+      var rowNum = i + 2;
+      var formulaPU = "=IFERROR(VLOOKUP(E" + rowNum + "; '" + CONFIG.tabRecursos + "'!A:D; 4; FALSE); IFERROR(VLOOKUP(E" + rowNum + "; '" + CONFIG.tabPartidas + "'!B:F; 5; FALSE); 0))";
       var formulaCosto = "=ROUND(G" + rowNum + " * I" + rowNum + "; 2)";
-      
+
       rowsToWrite.push([
         log.id_registro || log.id,
-        dateObj, // Date object para que MAX funcione en Google Sheets
+        dateObj,
         log.rol,
         log.wbs,
         log.codigoRecurso || log.codigo_recurso_partida,
@@ -349,23 +404,49 @@ function importarBaseSinteticaDesdeGithub() {
         log.origen_html
       ]);
     }
-    
-    // 3. Escribir todas las filas en un solo bloque (muy rápido)
+
+    // 3. Escribir todas las filas en un solo bloque (rápido)
     var range = sheet.getRange(2, 1, rowsToWrite.length, 12);
     range.setValues(rowsToWrite);
-    
-    // Formatear columna B como fecha
+
+    // 4. Formato
     sheet.getRange(2, 2, rowsToWrite.length, 1).setNumberFormat("yyyy-mm-dd");
-    
-    // Centrar columnas A, D, E, H
     sheet.getRange(2, 1, rowsToWrite.length, 1).setHorizontalAlignment("center");
     sheet.getRange(2, 4, rowsToWrite.length, 1).setHorizontalAlignment("center");
     sheet.getRange(2, 5, rowsToWrite.length, 1).setHorizontalAlignment("center");
     sheet.getRange(2, 8, rowsToWrite.length, 1).setHorizontalAlignment("center");
-    
-    Logger.log("🚀 ¡Importación completada! Se insertaron " + rowsToWrite.length + " filas con éxito.");
-    
+
+    Logger.log("🚀 ¡Importación completada! Se insertaron " + rowsToWrite.length + " filas.");
   } catch (error) {
     Logger.log("❌ Error en la importación: " + error.toString());
+  }
+}
+
+// ------------------------------------------------------------------------------
+// 7. (OPCIONAL) AUTO-CREACIÓN DE PESTAÑAS MAESTRAS SI NO EXISTEN
+// ------------------------------------------------------------------------------
+// Si tu hoja es nueva y aún no tiene 05/06, ejecuta esta función UNA vez desde el
+// editor (botón Ejecutar) para sembrar las cabeceras que el VLOOKUP necesita.
+
+function crearPestanasMaestras() {
+  var ss = getSpreadsheet();
+  if (!ss) {
+    Logger.log("❌ No se pudo conectar.");
+    return;
+  }
+
+  var estructura = {
+    "05_MAESTRO_RECURSOS": ["Código", "Descripción", "Unidad", "P.U. Meta (S/)"],
+    "06_MAESTRO_PARTIDAS_EV": ["#", "Código Partida", "Descripción", "Unidad", "Metrado", "P.U. Directo Meta (S/)"]
+  };
+
+  for (var tab in estructura) {
+    if (ss.getSheetByName(tab)) {
+      Logger.log("ℹ️ Pestaña '" + tab + "' ya existe.");
+      continue;
+    }
+    var s = ss.insertSheet(tab);
+    s.appendRow(estructura[tab]);
+    Logger.log("✅ Pestaña '" + tab + "' creada con cabecera.");
   }
 }
