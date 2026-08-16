@@ -1,10 +1,13 @@
 import subprocess
 import os
 import sys
+from pathlib import Path
+
+REPO_DIR = Path(__file__).resolve().parent.parent
 
 def run_git_command(args):
     try:
-        result = subprocess.run(["git"] + args, cwd="d:\\Agentes de IA\\Habilitación urbana", capture_output=True, text=True, check=True)
+        result = subprocess.run(["git"] + args, cwd=REPO_DIR, capture_output=True, text=True, check=True)
         print(f"[OK] git {' '.join(args)}\n{result.stdout}")
         return True, result.stdout
     except subprocess.CalledProcessError as e:
@@ -13,8 +16,8 @@ def run_git_command(args):
 
 def main():
     print("=========================================================")
-    print(" VINCULANDO PROYECTO LOCAL CON GITHUB REPORTESMART")
-    print(" Repositorio: https://github.com/aureliosrios/ReporteSmart")
+    print(" VINCULANDO PROYECTO LOCAL CON GITHUB REPORTE---1")
+    print(" Repositorio: https://github.com/epancajima-bot/REPORTE---1")
     print("=========================================================\n")
 
     # 1. Verificar estado de git
@@ -42,7 +45,7 @@ def main():
     if ok_push:
         print("\n=========================================================")
         print(" [ÉXITO] ARCHIVOS HTML Y JS PUBLICADOS EN GITHUB PAGES")
-        print(" Sitio activo: https://aureliosrios.github.io/ReporteSmart/")
+        print(" Sitio activo: https://epancajima-bot.github.io/REPORTE---1/")
         print("=========================================================")
     else:
         print("\n[AVISO] No se pudo hacer git push automático. Revisa credenciales o ejecuta 'git push' manualmente.")

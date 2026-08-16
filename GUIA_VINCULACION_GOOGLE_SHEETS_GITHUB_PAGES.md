@@ -1,6 +1,6 @@
-# Guía de Vinculación: Base de Datos Google Sheets + GitHub Pages (ReporteSmart)
+# Guía de Vinculación: Base de Datos Google Sheets + GitHub Pages (REPORTE-1)
 
-Esta guía explica el procedimiento paso a paso para desplegar la **Base de Datos Viva en Google Sheets** y conectar en tiempo real los formularios de campo alojados en GitHub Pages ([`https://aureliosrios.github.io/ReporteSmart/`](https://aureliosrios.github.io/ReporteSmart/)).
+Esta guía explica el procedimiento paso a paso para desplegar la **Base de Datos Viva en Google Sheets** y conectar en tiempo real los formularios de campo alojados en GitHub Pages ([`https://epancajima-bot.github.io/REPORTE---1/`](https://epancajima-bot.github.io/REPORTE---1/)).
 
 ---
 
@@ -29,7 +29,7 @@ Permitir que cuando el Tareador, Almacenero, Administradora o Ing. de Campo comp
 5. Haz clic en el botón azul de la esquina superior derecha: **Desplegar > Nuevo despliegue**.
 6. En la ventana emergente, configura exactamente los siguientes campos:
    - **Tipo de Despliegue**: Haz clic en el engranaje ⚙️ y selecciona **Aplicación web**.
-   - **Descripción**: `API Reportabilidad de Campo ReporteSmart`
+   - **Descripción**: `API Reportabilidad de Campo REPORTE-1`
    - **Ejecutar como**: `Yo (tu_correo@gmail.com)`
    - **Quién tiene acceso**: ⚠️ **`Cualquier persona` (Anyone)**  
      *(Esta opción es obligatoria para permitir que los celulares sin iniciar sesión envíen datos desde GitHub Pages)*.
@@ -44,7 +44,7 @@ Permitir que cuando el Tareador, Almacenero, Administradora o Ing. de Campo comp
 
 ## 🌐 PASO 3: Configurar la URL en GitHub Pages
 
-Para conectar los portales HTML de tu sitio `https://aureliosrios.github.io/ReporteSmart/` con la URL de tu Google Apps Script:
+Para conectar los portales HTML de tu sitio `https://epancajima-bot.github.io/REPORTE---1/` con la URL de tu Google Apps Script:
 
 ### Opción A (Configuración Global Dinámica en JS)
 En tu archivo JavaScript del sitio (`app.js`), la variable global con la URL activa de tu proyecto es:
@@ -55,7 +55,7 @@ window.RO_API_ENDPOINT = "https://script.google.com/macros/s/AKfycbycOxMRY83hp6S
 ```
 
 ### Opción B (Prueba Rápida desde Consola del Navegador)
-Si estás probando con tus alumnos en clase, pueden abrir la consola de su navegador (`F12`) en `https://aureliosrios.github.io/ReporteSmart/` y ejecutar:
+Si estás probando con tus alumnos en clase, pueden abrir la consola de su navegador (`F12`) en `https://epancajima-bot.github.io/REPORTE---1/` y ejecutar:
 
 ```javascript
 localStorage.setItem('ro_api_endpoint', 'https://script.google.com/macros/s/AKfycbycOxMRY83hp6SU185I942sojJ-UieDEsRzaFP3VfhjJ5vIZ0WFjUj5Vt__5YCeR4tD/exec');
@@ -66,7 +66,7 @@ localStorage.setItem('ro_api_endpoint', 'https://script.google.com/macros/s/AKfy
 ## 🧪 PASO 4: Prueba de Verificación de Entrada de Datos
 
 1. Abre desde tu celular o computadora el enlace:  
-   👉 [https://aureliosrios.github.io/ReporteSmart/tareador.html](https://aureliosrios.github.io/ReporteSmart/tareador.html)
+   👉 [https://epancajima-bot.github.io/REPORTE---1/tareador.html](https://epancajima-bot.github.io/REPORTE---1/tareador.html)
 2. Selecciona una WBS (ej. `WBS-200`), ingresa 2 operarios x 8 horas (16 HH) y haz clic en **Guardar Registros**.
 3. Revisa tu pestaña **`04_LOG_FIELD_ENTRIES`** en Google Sheets:
    - Se creará inmediatamente una nueva fila.
