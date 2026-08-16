@@ -1,0 +1,23 @@
+# Dependencias
+node_modules/
+**/node_modules/
+
+# Código compilado de Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Archivos temporales de Office
+~$*.docx
+~$*.xlsx
+*.tmp
+
+# Paquetes/archivos pesados que no se versionan
+*.zip
+*.rar
+*.7z
+
+# Entorno y editor
+.env
+.vscode/
+.idea/
